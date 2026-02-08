@@ -54,7 +54,7 @@ export class PasteReplacementFeature {
 	}
 
 	// ペースト処理ロジック
-	private handlePaste(evt: ClipboardEvent, editor: Editor, view: MarkdownView) {
+	private handlePaste(evt: ClipboardEvent, editor: Editor, _view: MarkdownView) {
 		if (this.settings.enabled === false) return;
 
 		const clipboardText = evt.clipboardData?.getData("text/plain");
