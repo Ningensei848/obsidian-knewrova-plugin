@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  quality-check:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # 1. Oxlint: 高速リント & エラー検知 (門番)
+      # まず致命的なエラーがないか爆速でチェックし、PRにアノテーションを付与します
+      - name: Run Oxlint
+        uses: oxc-project/oxlint-action@v3.0.0
+        with:
+          deny-warnings: true
+
+      # 2. Biome: フォーマット & リント (監督)
+      # Oxlintを通過した後、コードスタイルやフォーマットが正しいかを確認します
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+      - name: Run Biome
+        run: biome ci .

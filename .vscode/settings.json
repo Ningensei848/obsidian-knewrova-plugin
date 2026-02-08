@@ -1,0 +1,43 @@
+{
+	/* --- Biome Configuration --- */
+	"editor.defaultFormatter": "biomejs.biome",
+	"editor.formatOnSave": true,
+	"editor.codeActionsOnSave": {
+		"source.fixAll.biome": "explicit",
+		"source.organizeImports.biome": "explicit"
+	},
+
+	/* --- Oxlint Configuration --- */
+	"oxc.lint.run": "onType",
+	"oxc.trace.server": "off",
+
+	/* --- Language Overrides --- */
+	"[typescript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[json]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+
+	/* --- File Exclusions --- */
+	"files.exclude": {
+		"**/.git": true,
+		"**/.DS_Store": true,
+		"**/node_modules": true,
+		"**/*.js.map": true,
+		"dist": true
+	},
+	"search.exclude": {
+		"**/node_modules": true,
+		"**/*.js": true,
+		"**/*.d.ts": true
+	},
+
+	/* --- Associations --- */
+	"files.associations": {
+		".prototools": "toml"
+	}
+}

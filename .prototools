@@ -1,2 +1,5 @@
 node = "lts"
-pnpm = "latest"
+pnpm = "10.29.1"
+
+[settings]
+auto-install = true

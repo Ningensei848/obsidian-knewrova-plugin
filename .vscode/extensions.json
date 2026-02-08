@@ -1,0 +1,8 @@
+{
+	"recommendations": [
+		"biomejs.biome",
+		"oxc.oxc-vscode",
+		"vitest.explorer",
+		"tamasfe.even-better-toml"
+	]
+}
