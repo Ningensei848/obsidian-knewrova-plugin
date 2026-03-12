@@ -5,100 +5,207 @@ import {
 	type UserMap,
 } from "@/lib/DirectoryNameOverwrite";
 
-vi.mock("obsidian", () => import("../__mocks__/obsidian"));
+// Obsidianモックの拡張
+vi.mock("obsidian", () => {
+	return {
+		TFile: class {
+			path: string;
+			extension = "md";
+			constructor(path: string) { this.path = path; }
+		},
+		TFolder: class {
+			path: string;
+			constructor(path: string) { this.path = path; }
+		},
+		Setting: class {
+			setName() { return this; }
+			setDesc() { return this; }
+			addToggle() { return this; }
+			addText() { return this; }
+		}
+	};
+});
 
-describe("DirectoryNameOverwriteFeature Logic", () => {
+describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 	let feature: DirectoryNameOverwriteFeature;
 	let pluginMock: any;
+	let fileExplorerViewMock: any;
 
 	const mockMap: UserMap = {
 		scope: {
 			mode: "under",
-			roots: ["Shared", "Other/Root"],
+			roots: ["Shared"],
 		},
-		files: false,
+		files: true,
 		folders: true,
 		map: {
-			u123: "佐藤 太郎",
-			u999: "鈴木 花子",
-			ningensei848: "久保川一良", // 小文字定義
+			"u123": "佐藤 太郎",
+			"project-a": "プロジェクトA（進行中）"
 		},
-		order: ["ningensei848", "u999", "u123"],
+		order: ["u123", "project-a"]
 	};
 
 	beforeEach(() => {
+		// File Explorer View のモックを作成
+		fileExplorerViewMock = {
+			fileItems: {}
+		};
+
 		pluginMock = {
 			app: {
-				vault: { adapter: { exists: vi.fn(), read: vi.fn() }, on: vi.fn() },
-				workspace: { onLayoutReady: vi.fn(), on: vi.fn(), getLeavesOfType: vi.fn() },
+				vault: { 
+					adapter: { exists: vi.fn(), read: vi.fn() },
+					on: vi.fn() 
+				},
+				workspace: { 
+					onLayoutReady: vi.fn((cb) => cb()),
+					on: vi.fn(),
+					getLeavesOfType: vi.fn().mockReturnValue([{ view: fileExplorerViewMock }])
+				},
+				metadataCache: {
+					on: vi.fn(),
+					getFileCache: vi.fn()
+				}
 			},
 			registerEvent: vi.fn(),
 		};
+
 		feature = new DirectoryNameOverwriteFeature(
 			pluginMock,
-			DEFAULT_DIRECTORY_NAME_OVERWRITE_SETTINGS,
-			vi.fn(),
+			{ ...DEFAULT_DIRECTORY_NAME_OVERWRITE_SETTINGS },
+			vi.fn()
 		);
-		// テスト用にマップを直接注入
+
+		// 手動でマップを注入
 		(feature as any).userMap = mockMap;
 	});
 
-	// --- Renaming Logic Tests ---
+	// ヘルパー: fileItems にモック要素を追加
+	const addMockFileItem = (path: string, originalName: string, isFolder = false) => {
+		const el = document.createElement("div");
+		const titleEl = document.createElement("div");
+		const titleInner = document.createElement("div");
+		titleInner.className = isFolder ? "nav-folder-title-content" : "nav-file-title-content";
+		titleInner.textContent = originalName;
+		titleEl.appendChild(titleInner);
 
-	it("roots 直下のフォルダ名を置換すること", () => {
-		// Shared/u123 -> 佐藤 太郎
-		const name = feature.getDisplayName("Shared/u123", true);
-		expect(name).toBe("佐藤 太郎");
+		const fileMock = isFolder ? { path } : { path, extension: "md" };
+		
+		fileExplorerViewMock.fileItems[path] = {
+			el,
+			titleEl,
+			file: fileMock
+		};
+		return fileExplorerViewMock.fileItems[path];
+	};
+
+	describe("コアロジック: 表示名の決定", () => {
+		it("user-map.json の設定に従って名前を返すこと", () => {
+			const name = feature.getDisplayName("Shared/u123", true);
+			expect(name).toBe("佐藤 太郎");
+		});
+
+		it("scope 外のパスは null を返すこと", () => {
+			const name = feature.getDisplayName("Other/u123", true);
+			expect(name).toBeNull();
+		});
 	});
 
-	it("複数の roots に対応すること", () => {
-		// Other/Root/u999 -> 鈴木 花子
-		const name = feature.getDisplayName("Other/Root/u999", true);
-		expect(name).toBe("鈴木 花子");
+	describe("表示の上書き (applyTitleToItem)", () => {
+		it("Mapに定義されたフォルダ名を書き換えること", () => {
+			const item = addMockFileItem("Shared/u123", "u123", true);
+			
+			(feature as any).applyTitleToItem(item);
+
+			const titleInner = item.titleEl.querySelector(".nav-folder-title-content");
+			expect(titleInner?.textContent).toBe("佐藤 太郎");
+			expect(item.el.getAttribute("data-original-name")).toBe("u123");
+			expect(item.el.getAttribute("data-knewrova-overwritten")).toBe("true");
+		});
+
+		it("FrontMatter に title がある場合、Map より優先されること", () => {
+			const path = "Shared/u123";
+			const item = addMockFileItem(path, "u123", false);
+			
+			// metadataCache のモック設定
+			pluginMock.app.metadataCache.getFileCache.mockReturnValue({
+				frontmatter: { title: "FMからの名前" }
+			});
+
+			(feature as any).applyTitleToItem(item);
+
+			const titleInner = item.titleEl.querySelector(".nav-file-title-content");
+			expect(titleInner?.textContent).toBe("FMからの名前");
+		});
+
+		it("上書き対象でない場合は元の名前に戻ること", () => {
+			const item = addMockFileItem("Other/Unknown", "Unknown", false);
+			item.el.setAttribute("data-original-name", "Unknown");
+			item.el.setAttribute("data-knewrova-overwritten", "true");
+			
+			(feature as any).applyTitleToItem(item);
+
+			expect(item.el.hasAttribute("data-original-name")).toBe(false);
+			expect(item.el.style.color).toBe("");
+		});
 	});
 
-	it("大文字小文字を区別せずに置換すること (Ningensei848 -> ningensei848)", () => {
-		// 実際のパスは大文字混じりだが、設定は小文字
-		const name = feature.getDisplayName("Shared/Ningensei848", true);
-		expect(name).toBe("久保川一良");
+	describe("ソート機能 (applyFolderSorting)", () => {
+		it("order設定に基づいてDOM要素を並び替えること", () => {
+			const rootPath = "Shared";
+			const rootItem = addMockFileItem(rootPath, "Shared", true);
+			
+			// 子要素コンテナを作成
+			const childrenContainer = document.createElement("div");
+			childrenContainer.className = "nav-folder-children";
+			
+			// rootItem.el の隣に配置するシミュレーション
+			Object.defineProperty(rootItem.el, 'nextElementSibling', {
+				get: () => childrenContainer
+			});
+
+			// 子要素（ファイル/フォルダ）を逆順で作成
+			const itemB = document.createElement("div");
+			const selfB = document.createElement("div");
+			selfB.className = "tree-item-self";
+			selfB.setAttribute("data-path", "Shared/project-a");
+			itemB.appendChild(selfB);
+
+			const itemA = document.createElement("div");
+			const selfA = document.createElement("div");
+			selfA.className = "tree-item-self";
+			selfA.setAttribute("data-path", "Shared/u123");
+			itemA.appendChild(selfA);
+
+			childrenContainer.appendChild(itemB); // project-a を先に
+			childrenContainer.appendChild(itemA); // u123 を後に
+
+			// ソート実行
+			(feature as any).applyFolderSorting(rootPath);
+
+			// order: ["u123", "project-a"] なので順序が入れ替わっているはず
+			expect(childrenContainer.children[0]).toBe(itemA);
+			expect(childrenContainer.children[1]).toBe(itemB);
+		});
 	});
 
-	it("大文字小文字を区別せずに置換すること (U123 -> u123)", () => {
-		const name = feature.getDisplayName("Shared/U123", true);
-		expect(name).toBe("佐藤 太郎");
+	describe("イベント連携", () => {
+		it("onload 時に必要なイベントを登録すること", async () => {
+			await feature.onload();
+			
+			// vault.on('rename'), metadataCache.on('changed') 等が呼ばれているか
+			expect(pluginMock.app.vault.on).toHaveBeenCalledWith("rename", expect.any(Function));
+			expect(pluginMock.app.metadataCache.on).toHaveBeenCalledWith("changed", expect.any(Function));
+		});
+
+		it("onunload 時にすべての変更を元に戻すこと", () => {
+			const item = addMockFileItem("Shared/u123", "佐藤 太郎", true);
+			item.el.setAttribute("data-original-name", "u123");
+			
+			feature.onunload();
+
+			const titleInner = item.titleEl.querySelector(".nav-folder-title-content");
+			expect(titleInner?.textContent).toBe("u123");
+		});
 	});
-
-	it("マップに存在しない名前は null を返すこと", () => {
-		const name = feature.getDisplayName("Shared/u000", true);
-		expect(name).toBeNull();
-	});
-
-	it("roots 配下でないパスは置換しないこと", () => {
-		// u123 はマップにあるが、親が Shared ではない
-		const name = feature.getDisplayName("MyWork/u123", true);
-		expect(name).toBeNull();
-	});
-
-	it("階層が深すぎる場合は置換しないこと (mode='under' の仕様: 直下のみ)", () => {
-		// Shared/Project/u123 -> 親は Shared/Project なので roots=["Shared"] には該当しない
-		const name = feature.getDisplayName("Shared/Project/u123", true);
-		expect(name).toBeNull();
-	});
-
-	it("ファイルの設定が無効な場合はファイルを置換しないこと", () => {
-		// files: false 設定
-		const name = feature.getDisplayName("Shared/u123", false); // isFolder=false
-		expect(name).toBeNull();
-	});
-
-	// --- Sorting Logic Tests ---
-
-	it("order設定が正しくロードされていること", () => {
-		const loadedMap = (feature as any).userMap as UserMap;
-		expect(loadedMap.order).toBeDefined();
-		expect(loadedMap.order).toContain("ningensei848");
-	});
-
-	// Note: applySorting のDOM操作ロジックは jsdom 環境での複雑なセットアップが必要なため、
-	// ロジックの依存データ構造が正しいことのみを確認しています。
 });

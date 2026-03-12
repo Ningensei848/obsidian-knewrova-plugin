@@ -1,365 +1,337 @@
-import { type Plugin, Setting } from "obsidian";
+import { type Plugin, Setting, TAbstractFile, TFile, MarkdownView } from "obsidian";
+
+// --- 型定義 ---
 
 export interface UserMapScope {
-	mode: "under" | "exact";
-	roots: string[];
+    mode: "under" | "exact";
+    roots: string[];
 }
 
 export interface UserMap {
-	scope: UserMapScope;
-	files: boolean;
-	folders: boolean;
-	map: Record<string, string>;
-	order?: string[]; // 並び順定義（オプション）
+    scope: UserMapScope;
+    files: boolean;
+    folders: boolean;
+    map: Record<string, string>;
+    order?: string[];
 }
 
 export interface DirectoryNameOverwriteSettings {
-	enabled: boolean;
-	mapFilePath: string;
+    enabled: boolean;
+    mapFilePath: string;
+    frontMatterKey: string; // FrontMatter で表示名として使うキー
 }
 
 export const DEFAULT_DIRECTORY_NAME_OVERWRITE_SETTINGS: DirectoryNameOverwriteSettings = {
-	enabled: true,
-	mapFilePath: "user-map.json",
+    enabled: true,
+    mapFilePath: "user-map.json",
+    frontMatterKey: "title",
 };
 
+// Obsidian 内部 API の型定義 (一部抜粋)
+interface FileExplorerItem {
+    el: HTMLElement;
+    titleEl: HTMLElement;
+    file: TAbstractFile;
+}
+
+interface FileExplorerView {
+    fileItems: Record<string, FileExplorerItem>;
+}
+
 export class DirectoryNameOverwriteFeature {
-	private plugin: Plugin;
-	private settings: DirectoryNameOverwriteSettings;
-	private onSettingsSave: () => Promise<void>;
-	private userMap: UserMap | null = null;
-	private observer: MutationObserver | null = null;
+    private plugin: Plugin;
+    private settings: DirectoryNameOverwriteSettings;
+    private onSettingsSave: () => Promise<void>;
+    private userMap: UserMap | null = null;
 
-	constructor(
-		plugin: Plugin,
-		settings: DirectoryNameOverwriteSettings,
-		onSettingsSave: () => Promise<void>,
-	) {
-		this.plugin = plugin;
-		this.settings = settings;
-		this.onSettingsSave = onSettingsSave;
-	}
+    constructor(
+        plugin: Plugin,
+        settings: DirectoryNameOverwriteSettings,
+        onSettingsSave: () => Promise<void>
+    ) {
+        this.plugin = plugin;
+        this.settings = settings;
+        this.onSettingsSave = onSettingsSave;
+    }
 
-	public async onload() {
-		await this.loadUserMap();
+    public async onload() {
+        await this.loadUserMap();
 
-		this.plugin.app.workspace.onLayoutReady(() => {
-			console.log("[DirectoryNameOverwrite] Layout Ready.");
-			this.startObserving();
-			setTimeout(() => {
-				this.applyOverwrites();
-				this.applySorting(); // 初回ソート
-			}, 1000);
-		});
+        this.plugin.app.workspace.onLayoutReady(() => {
+            console.log("[DirectoryNameOverwrite] Initializing via Internal API.");
+            this.refreshAll();
+        });
 
-		this.plugin.registerEvent(
-			this.plugin.app.vault.on("modify", async (file) => {
-				if (file.path === this.settings.mapFilePath) {
-					console.log("[DirectoryNameOverwrite] Map file changed.");
-					await this.loadUserMap();
-					this.applyOverwrites();
-					this.applySorting();
-				}
-			}),
-		);
+        // ファイル名変更時
+        this.plugin.registerEvent(
+            this.plugin.app.vault.on("rename", (file) => {
+                this.updateSingleItem(file);
+            })
+        );
 
-		this.plugin.registerEvent(
-			this.plugin.app.workspace.on("layout-change", () => {
-				this.applyOverwrites();
-				this.applySorting();
-			}),
-		);
-	}
+        // メタデータ（FrontMatter）変更時
+        this.plugin.registerEvent(
+            this.plugin.app.metadataCache.on("changed", (file) => {
+                this.updateSingleItem(file);
+            })
+        );
 
-	public onunload() {
-		this.stopObserving();
-		this.revertOverwrites();
-		// ソートのリセットはDOM構造を破壊する可能性があるため行わない（リロードで戻る）
-	}
+        // マップファイル自体の変更
+        this.plugin.registerEvent(
+            this.plugin.app.vault.on("modify", async (file) => {
+                if (file.path === this.settings.mapFilePath) {
+                    await this.loadUserMap();
+                    this.refreshAll();
+                }
+            })
+        );
 
-	private async loadUserMap() {
-		try {
-			const exists = await this.plugin.app.vault.adapter.exists(this.settings.mapFilePath);
-			if (!exists) {
-				console.log(
-					`[DirectoryNameOverwrite] Map file not found: ${this.settings.mapFilePath}`,
-				);
-				this.userMap = null;
-				return;
-			}
-			const content = await this.plugin.app.vault.adapter.read(this.settings.mapFilePath);
-			this.userMap = JSON.parse(content);
-		} catch (e) {
-			console.error("[DirectoryNameOverwrite] Failed to load user map:", e);
-			this.userMap = null;
-		}
-	}
+        // ビューが切り替わった時などの再描画対策
+        this.plugin.registerEvent(
+            this.plugin.app.workspace.on("layout-change", () => {
+                this.refreshAll();
+            })
+        );
+    }
 
-	private startObserving() {
-		this.stopObserving();
+    public onunload() {
+        this.revertAll();
+    }
 
-		this.observer = new MutationObserver((mutations) => {
-			let shouldUpdate = false;
-			for (const mutation of mutations) {
-				if (mutation.type === "childList" || mutation.type === "characterData") {
-					shouldUpdate = true;
-				}
-			}
-			if (shouldUpdate) {
-				this.applyOverwrites();
-				this.applySorting(); // DOM変更時もソート適用
-			}
-		});
+    private async loadUserMap() {
+        try {
+            const adapter = this.plugin.app.vault.adapter;
+            if (!(await adapter.exists(this.settings.mapFilePath))) {
+                this.userMap = null;
+                return;
+            }
+            const content = await adapter.read(this.settings.mapFilePath);
+            this.userMap = JSON.parse(content);
+        } catch (e) {
+            console.error("[DirectoryNameOverwrite] Failed to load map:", e);
+            this.userMap = null;
+        }
+    }
 
-		const leaves = this.plugin.app.workspace.getLeavesOfType("file-explorer");
-		for (const leaf of leaves) {
-			const container = leaf.view.containerEl;
-			this.observer.observe(container, {
-				childList: true,
-				subtree: true,
-				attributes: true,
-				attributeFilter: ["data-path", "class"],
-			});
-		}
-	}
+    /**
+     * File Explorer ビューを取得する内部 API へのアクセス
+     */
+    private getFileExplorerView(): FileExplorerView | null {
+        const leaf = this.plugin.app.workspace.getLeavesOfType("file-explorer")[0];
+        if (!leaf) return null;
+        return leaf.view as unknown as FileExplorerView;
+    }
 
-	private stopObserving() {
-		if (this.observer) {
-			this.observer.disconnect();
-			this.observer = null;
-		}
-	}
+    /**
+     * すべての表示をリフレッシュ（初回ロード用）
+     */
+    public refreshAll() {
+        if (!this.settings.enabled) return;
+        const view = this.getFileExplorerView();
+        if (!view) return;
 
-	// --- Renaming Logic ---
+        // 全アイテムを処理
+        for (const path in view.fileItems) {
+            const item = view.fileItems[path];
+            if (item) this.applyTitleToItem(item);
+        }
 
-	private applyOverwrites() {
-		if (!this.settings.enabled || !this.userMap) return;
+        // ソート適用 (Map に order がある場合)
+        if (this.userMap?.order) {
+            this.applyAllSorting();
+        }
+    }
 
-		const navItems = document.querySelectorAll(".tree-item-self");
+    /**
+     * 特定のファイル/フォルダの表示名のみを更新
+     */
+    private updateSingleItem(file: TAbstractFile) {
+        if (!this.settings.enabled) return;
+        const view = this.getFileExplorerView();
+        if (!view) return;
 
-		for (const node of Array.from(navItems)) {
-			const item = node as HTMLElement;
+        const item = view.fileItems[file.path];
+        if (item) {
+            this.applyTitleToItem(item);
+            // 親フォルダのソートをトリガー
+            if (file.parent) this.applyFolderSorting(file.parent.path);
+        }
+    }
 
-			let path = item.getAttribute("data-path");
-			if (!path && item.parentElement) {
-				path = item.parentElement.getAttribute("data-path");
-			}
+    /**
+     * アイテムに表示名を適用するコアロジック
+     */
+    private applyTitleToItem(item: FileExplorerItem) {
+        const file = item.file;
+        const isFolder = file instanceof TFile === false;
+        
+        let newTitle = this.getDisplayName(file.path, isFolder);
 
-			if (!path) continue;
+        // ファイルかつ FrontMatter 設定がある場合はそちらを優先（またはフォールバック）
+        if (file instanceof TFile && file.extension === "md") {
+            const cache = this.plugin.app.metadataCache.getFileCache(file);
+            const fmTitle = cache?.frontmatter?.[this.settings.frontMatterKey];
+            if (fmTitle) {
+                newTitle = String(fmTitle);
+            }
+        }
 
-			let isFolder = false;
-			if (item.classList.contains("nav-folder-title")) {
-				isFolder = true;
-			} else if (item.parentElement?.classList.contains("nav-folder")) {
-				isFolder = true;
-			}
+        const titleInner = item.titleEl.querySelector(".nav-folder-title-content, .nav-file-title-content") || item.titleEl;
 
-			const newName = this.getDisplayName(path, isFolder);
+        if (newTitle) {
+            // 元の名前を保存（未保存の場合のみ）
+            if (!item.el.hasAttribute("data-original-name")) {
+                item.el.setAttribute("data-original-name", titleInner.textContent || "");
+            }
+            
+            if (titleInner.textContent !== newTitle) {
+                titleInner.textContent = newTitle;
+                item.el.setAttribute("data-knewrova-overwritten", "true");
+                item.el.style.color = "var(--text-accent)";
+            }
+        } else {
+            this.restoreItem(item);
+        }
+    }
 
-			if (newName) {
-				this.overwriteItemName(item, newName);
-			} else {
-				this.restoreItemName(item);
-			}
-		}
-	}
+    private restoreItem(item: FileExplorerItem) {
+        if (item.el.hasAttribute("data-original-name")) {
+            const original = item.el.getAttribute("data-original-name");
+            const titleInner = item.titleEl.querySelector(".nav-folder-title-content, .nav-file-title-content") || item.titleEl;
+            if (original) titleInner.textContent = original;
+            item.el.removeAttribute("data-original-name");
+            item.el.removeAttribute("data-knewrova-overwritten");
+            item.el.style.removeProperty("color");
+        }
+    }
 
-	private overwriteItemName(item: HTMLElement, newName: string) {
-		const contentEl = item.querySelector(
-			".tree-item-inner, .nav-folder-title-content, .nav-file-title-content",
-		);
-		if (!contentEl) return;
+    private revertAll() {
+        const view = this.getFileExplorerView();
+        if (!view) return;
+        for (const path in view.fileItems) {
+            this.restoreItem(view.fileItems[path]);
+        }
+    }
 
-		if (contentEl.textContent === newName && item.hasAttribute("data-knewrova-overwritten"))
-			return;
+    /**
+     * 指定されたパスと種別に基づき、user-map.json から表示名を取得
+     */
+    public getDisplayName(path: string, isFolder: boolean): string | null {
+        if (!this.userMap) return null;
+        const { scope, map, files, folders } = this.userMap;
 
-		if (!item.hasAttribute("data-original-name")) {
-			item.setAttribute("data-original-name", contentEl.textContent || "");
-		}
+        if (isFolder && !folders) return null;
+        if (!isFolder && !files) return null;
 
-		console.log(
-			`[DirectoryNameOverwrite] Overwriting: ${item.getAttribute("data-path")} -> ${newName}`,
-		);
-		contentEl.textContent = newName;
-		item.setAttribute("data-knewrova-overwritten", "true");
-		item.style.color = "var(--text-accent)";
-	}
+        const parts = path.split("/");
+        const name = parts[parts.length - 1] || "";
+        const parentPath = parts.slice(0, -1).join("/");
 
-	private restoreItemName(item: HTMLElement) {
-		if (item.hasAttribute("data-original-name")) {
-			const originalName = item.getAttribute("data-original-name");
-			const contentEl = item.querySelector(
-				".tree-item-inner, .nav-folder-title-content, .nav-file-title-content",
-			);
-			if (contentEl && originalName) {
-				contentEl.textContent = originalName;
-			}
-			item.removeAttribute("data-original-name");
-			item.removeAttribute("data-knewrova-overwritten");
-			item.style.removeProperty("color");
-		}
-	}
+        // 大文字小文字を無視してマップ検索
+        const matchedKey = Object.keys(map).find(k => k.toLowerCase() === name.toLowerCase());
+        if (!matchedKey) return null;
 
-	private revertOverwrites() {
-		const items = document.querySelectorAll("[data-knewrova-overwritten='true']");
-		for (const item of Array.from(items)) {
-			this.restoreItemName(item as HTMLElement);
-		}
-	}
+        const displayName = map[matchedKey] || null;
 
-	public getDisplayName(path: string, isFolder: boolean, debug = false): string | null {
-		if (!this.userMap) return null;
+        if (scope.mode === "under") {
+            return scope.roots.includes(parentPath) ? displayName : null;
+        } else if (scope.mode === "exact") {
+            return scope.roots.includes(path) ? displayName : null;
+        }
+        return null;
+    }
 
-		const { scope, map, files, folders } = this.userMap;
+    // --- ソートロジック ---
 
-		if (isFolder && !folders) return null;
-		if (!isFolder && !files) return null;
+    private applyAllSorting() {
+        if (!this.userMap?.order || this.userMap.scope.mode !== "under") return;
+        for (const root of this.userMap.scope.roots) {
+            this.applyFolderSorting(root);
+        }
+    }
 
-		const parts = path.split("/");
-		const name = parts[parts.length - 1];
-		const parentPath = parts.slice(0, -1).join("/");
+    private applyFolderSorting(folderPath: string) {
+        if (!this.userMap?.order) return;
+        const view = this.getFileExplorerView();
+        if (!view) return;
 
-		// Case Insensitive Search
-		const matchedKey = Object.keys(map).find((key) => key.toLowerCase() === name.toLowerCase());
+        const parentItem = view.fileItems[folderPath];
+        if (!parentItem) return;
 
-		if (!matchedKey) {
-			if (debug) console.log(`[Debug] No match in map for '${name}'`);
-			return null;
-		}
+        // 子要素コンテナを取得
+        const childrenEl = parentItem.el.nextElementSibling;
+        if (!childrenEl || !childrenEl.classList.contains("nav-folder-children")) return;
 
-		const displayName = map[matchedKey];
+        const childNodes = Array.from(childrenEl.children) as HTMLElement[];
+        if (childNodes.length < 2) return;
 
-		if (scope.mode === "under") {
-			if (scope.roots.includes(parentPath)) {
-				if (debug) console.log(`[Debug] Match!: path='${path}' -> '${displayName}'`);
-				return displayName;
-			}
-		} else if (scope.mode === "exact") {
-			if (scope.roots.includes(path)) {
-				return displayName;
-			}
-		}
+        const order = this.userMap.order;
+        const sortedNodes = [...childNodes].sort((a, b) => {
+            const pathA = a.querySelector(".tree-item-self")?.getAttribute("data-path") || "";
+            const pathB = b.querySelector(".tree-item-self")?.getAttribute("data-path") || "";
+            const nameA = pathA.split("/").pop()?.toLowerCase() || "";
+            const nameB = pathB.split("/").pop()?.toLowerCase() || "";
 
-		return null;
-	}
+            const indexA = order.indexOf(nameA);
+            const indexB = order.indexOf(nameB);
 
-	// --- Sorting Logic ---
+            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+            if (indexA !== -1) return -1;
+            if (indexB !== -1) return 1;
+            return nameA.localeCompare(nameB);
+        });
 
-	private applySorting() {
-		if (!this.settings.enabled || !this.userMap || !this.userMap.order) return;
+        // 順序が変わっている場合のみ DOM を再配置
+        let changed = false;
+        for (let i = 0; i < childNodes.length; i++) {
+            if (childNodes[i] !== sortedNodes[i]) {
+                changed = true;
+                break;
+            }
+        }
 
-		const { scope, order } = this.userMap;
-		if (scope.mode !== "under") return;
+        if (changed) {
+            for (const node of sortedNodes) {
+                childrenEl.appendChild(node);
+            }
+        }
+    }
 
-		for (const rootPath of scope.roots) {
-			// ルートフォルダの要素を探す
-			// data-path="Shared/User" のような .tree-item-self を探す
-			// セレクタエスケープが必要な文字が含まれる場合は CSS.escape を使う
-			// const safePath = CSS.escape(rootPath);
-			// DOM検索: .tree-item-self[data-path="..."]
-			const navItems = document.querySelectorAll(".tree-item-self");
-			let targetRootEl: HTMLElement | null = null;
+    public displaySettings(containerEl: HTMLElement) {
+        containerEl.createEl("h2", { text: "Directory Name Overwrite (Optimized)" });
 
-			// data-path 完全一致で探す
-			for (const item of Array.from(navItems)) {
-				const path = item.getAttribute("data-path");
-				if (path === rootPath) {
-					targetRootEl = item as HTMLElement;
-					break;
-				}
-			}
+        new Setting(containerEl)
+            .setName("有効化")
+            .setDesc("ファイルエクスプローラーの表示名を書き換えます。")
+            .addToggle((toggle) =>
+                toggle.setValue(this.settings.enabled).onChange(async (v) => {
+                    this.settings.enabled = v;
+                    await this.onSettingsSave();
+                    v ? this.refreshAll() : this.revertAll();
+                })
+            );
 
-			if (!targetRootEl) continue;
+        new Setting(containerEl)
+            .setName("FrontMatter Key")
+            .setDesc("ファイルの表示名として優先的に使用する FrontMatter プロパティ名")
+            .addText((text) =>
+                text.setValue(this.settings.frontMatterKey).onChange(async (v) => {
+                    this.settings.frontMatterKey = v;
+                    await this.onSettingsSave();
+                    this.refreshAll();
+                })
+            );
 
-			// .tree-item コンテナを取得
-			const parentItem = targetRootEl.closest(".tree-item");
-			if (!parentItem) continue;
-
-			// 子要素コンテナ (.tree-item-children)
-			const childrenContainer = parentItem.querySelector(".tree-item-children");
-			if (!childrenContainer) continue;
-
-			// 子要素 (.tree-item) のリスト
-			const children = Array.from(childrenContainer.children) as HTMLElement[];
-			if (children.length < 2) continue;
-
-			// マップ作成: フォルダ名(小文字) -> 要素
-			const childMap = new Map<string, HTMLElement>();
-			for (const child of children) {
-				const self = child.querySelector(".tree-item-self");
-				const path = self?.getAttribute("data-path");
-				if (path) {
-					const name = path.split("/").pop();
-					if (name) childMap.set(name.toLowerCase(), child);
-				}
-			}
-
-			const sortedNodes: HTMLElement[] = [];
-			const processedSet = new Set<HTMLElement>();
-
-			// 1. order 指定順に並べる
-			for (const orderKey of order) {
-				const child = childMap.get(orderKey.toLowerCase());
-				if (child) {
-					sortedNodes.push(child);
-					processedSet.add(child);
-				}
-			}
-
-			// 2. order にないものは元の順序を維持して後ろに追加
-			for (const child of children) {
-				if (!processedSet.has(child)) {
-					sortedNodes.push(child);
-				}
-			}
-
-			// 並び替え適用 (変更がある場合のみ appendChild し直す)
-			let isDifferent = false;
-			for (let i = 0; i < children.length; i++) {
-				if (children[i] !== sortedNodes[i]) {
-					isDifferent = true;
-					break;
-				}
-			}
-
-			if (isDifferent) {
-				console.log(`[DirectoryNameOverwrite] Sorting items in: ${rootPath}`);
-				for (const node of sortedNodes) {
-					childrenContainer.appendChild(node);
-				}
-			}
-		}
-	}
-
-	public displaySettings(containerEl: HTMLElement) {
-		containerEl.createEl("h2", { text: "Directory Name Overwrite" });
-
-		new Setting(containerEl)
-			.setName("Enable Overwrite")
-			.setDesc("user-map.json に基づいてファイルエクスプローラーの表示名を書き換えます。")
-			.addToggle((toggle) =>
-				toggle.setValue(this.settings.enabled).onChange(async (value) => {
-					this.settings.enabled = value;
-					await this.onSettingsSave();
-					if (value) {
-						await this.loadUserMap();
-						this.applyOverwrites();
-						this.applySorting();
-					} else {
-						this.revertOverwrites();
-					}
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Map File Path")
-			.setDesc("マッピング定義ファイルのパス")
-			.addText((text) =>
-				text.setValue(this.settings.mapFilePath).onChange(async (value) => {
-					this.settings.mapFilePath = value;
-					await this.onSettingsSave();
-					await this.loadUserMap();
-				}),
-			);
-	}
+        new Setting(containerEl)
+            .setName("Map File Path")
+            .setDesc("マッピング定義ファイル (JSON) のパス")
+            .addText((text) =>
+                text.setValue(this.settings.mapFilePath).onChange(async (v) => {
+                    this.settings.mapFilePath = v;
+                    await this.onSettingsSave();
+                    await this.loadUserMap();
+                    this.refreshAll();
+                })
+            );
+    }
 }
