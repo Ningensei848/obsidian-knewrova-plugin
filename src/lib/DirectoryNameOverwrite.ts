@@ -30,7 +30,7 @@ export const DEFAULT_DIRECTORY_NAME_OVERWRITE_SETTINGS: DirectoryNameOverwriteSe
 // Obsidian 内部 API の型定義 (一部抜粋)
 interface FileExplorerItem {
 	el: HTMLElement;
-	titleEl: HTMLElement;
+	titleEl?: HTMLElement; // 存在しない場合があるためオプショナルに修正
 	file: TAbstractFile;
 }
 
@@ -131,7 +131,7 @@ export class DirectoryNameOverwriteFeature {
 		const view = this.getFileExplorerView();
 		if (!view) return;
 
-		// 全アイテムを処理 (Object.entries を使用)
+		// 全アイテムを処理
 		for (const [_, item] of Object.entries(view.fileItems)) {
 			if (item) this.applyTitleToItem(item);
 		}
@@ -162,6 +162,9 @@ export class DirectoryNameOverwriteFeature {
 	 * アイテムに表示名を適用するコアロジック
 	 */
 	private applyTitleToItem(item: FileExplorerItem) {
+		// item または item.titleEl が存在しない場合はスキップ
+		if (!item?.titleEl || !item.el) return;
+
 		const file = item.file;
 		const isFolder = !(file instanceof TFile);
 
@@ -181,7 +184,7 @@ export class DirectoryNameOverwriteFeature {
 			item.titleEl;
 
 		if (newTitle) {
-			// 元の名前を保存（未保存の場合のみ）
+			// 元の名前を保存
 			if (!item.el.hasAttribute("data-original-name")) {
 				item.el.setAttribute("data-original-name", titleInner.textContent || "");
 			}
@@ -197,12 +200,14 @@ export class DirectoryNameOverwriteFeature {
 	}
 
 	private restoreItem(item: FileExplorerItem) {
+		if (!item?.el || !item.titleEl) return;
+
 		if (item.el.hasAttribute("data-original-name")) {
 			const original = item.el.getAttribute("data-original-name");
 			const titleInner =
 				item.titleEl.querySelector(".nav-folder-title-content, .nav-file-title-content") ||
 				item.titleEl;
-			if (original) titleInner.textContent = original;
+			if (original !== null) titleInner.textContent = original;
 			item.el.removeAttribute("data-original-name");
 			item.el.removeAttribute("data-knewrova-overwritten");
 			item.el.style.removeProperty("color");
@@ -213,7 +218,7 @@ export class DirectoryNameOverwriteFeature {
 		const view = this.getFileExplorerView();
 		if (!view) return;
 		for (const [_, item] of Object.entries(view.fileItems)) {
-			this.restoreItem(item);
+			if (item) this.restoreItem(item);
 		}
 	}
 
@@ -231,7 +236,6 @@ export class DirectoryNameOverwriteFeature {
 		const name = parts[parts.length - 1] || "";
 		const parentPath = parts.slice(0, -1).join("/");
 
-		// 大文字小文字を無視してマップ検索
 		const matchedKey = Object.keys(map).find((k) => k.toLowerCase() === name.toLowerCase());
 		if (!matchedKey) return null;
 
@@ -261,9 +265,8 @@ export class DirectoryNameOverwriteFeature {
 		if (!view) return;
 
 		const parentItem = view.fileItems[folderPath];
-		if (!parentItem) return;
+		if (!parentItem?.el) return;
 
-		// 子要素コンテナを取得
 		const childrenEl = parentItem.el.nextElementSibling;
 		if (!childrenEl || !childrenEl.classList.contains("nav-folder-children")) return;
 
@@ -286,7 +289,6 @@ export class DirectoryNameOverwriteFeature {
 			return nameA.localeCompare(nameB);
 		});
 
-		// 順序が変わっている場合のみ DOM を再配置
 		let changed = false;
 		for (let i = 0; i < childNodes.length; i++) {
 			if (childNodes[i] !== sortedNodes[i]) {
