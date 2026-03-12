@@ -1,4 +1,4 @@
-import { Setting, TFile, type Plugin, type TAbstractFile } from "obsidian";
+import { type Plugin, Setting, type TAbstractFile, TFile } from "obsidian";
 
 // --- 型定義 ---
 
@@ -120,7 +120,7 @@ export class DirectoryNameOverwriteFeature {
 		const leaf = this.plugin.app.workspace.getLeavesOfType("file-explorer")[0];
 		if (!leaf) return null;
 		// 内部 API のため unknown 経由でキャスト
-		return leaf.view as unknown as FileExplorerView;
+		return (leaf.view as unknown) as FileExplorerView;
 	}
 
 	/**

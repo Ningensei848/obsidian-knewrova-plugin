@@ -40,9 +40,7 @@ vi.mock("obsidian", () => {
 
 describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 	let feature: DirectoryNameOverwriteFeature;
-	// biome-ignore lint/suspicious/noExplicitAny: <Test mock requires any>
 	let pluginMock: any;
-	// biome-ignore lint/suspicious/noExplicitAny: <Test mock requires any>
 	let fileExplorerViewMock: any;
 
 	const mockMap: UserMap = {
@@ -91,7 +89,6 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		);
 
 		// 手動でマップを注入
-		// biome-ignore lint/suspicious/noExplicitAny: <Private property access>
 		(feature as any).userMap = mockMap;
 	});
 
@@ -130,7 +127,6 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		it("Mapに定義されたフォルダ名を書き換えること", () => {
 			const item = addMockFileItem("Shared/u123", "u123", true);
 
-			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyTitleToItem(item);
 
 			const titleInner = item.titleEl.querySelector(".nav-folder-title-content");
@@ -148,7 +144,6 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 				frontmatter: { title: "FMからの名前" },
 			});
 
-			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyTitleToItem(item);
 
 			const titleInner = item.titleEl.querySelector(".nav-file-title-content");
@@ -160,7 +155,6 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 			item.el.setAttribute("data-original-name", "Unknown");
 			item.el.setAttribute("data-knewrova-overwritten", "true");
 
-			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyTitleToItem(item);
 
 			expect(item.el.hasAttribute("data-original-name")).toBe(false);
@@ -199,7 +193,6 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 			childrenContainer.appendChild(itemA); // u123 を後に
 
 			// ソート実行
-			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyFolderSorting(rootPath);
 
 			// order: ["u123", "project-a"] なので順序が入れ替わっているはず
@@ -214,7 +207,10 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 
 			// vault.on('rename'), metadataCache.on('changed') 等が呼ばれているか
 			expect(pluginMock.app.vault.on).toHaveBeenCalledWith("rename", expect.any(Function));
-			expect(pluginMock.app.metadataCache.on).toHaveBeenCalledWith("changed", expect.any(Function));
+			expect(pluginMock.app.metadataCache.on).toHaveBeenCalledWith(
+				"changed",
+				expect.any(Function),
+			);
 		});
 
 		it("onunload 時にすべての変更を元に戻すこと", () => {
