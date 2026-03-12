@@ -119,8 +119,8 @@ export class DirectoryNameOverwriteFeature {
 	private getFileExplorerView(): FileExplorerView | null {
 		const leaf = this.plugin.app.workspace.getLeavesOfType("file-explorer")[0];
 		if (!leaf) return null;
-		// 内部 API のため unknown 経由でキャスト
-		return (leaf.view as unknown) as FileExplorerView;
+		// 内部 API のため unknown 経由でキャスト (Biome 指摘: 冗長な括弧を削除)
+		return leaf.view as unknown as FileExplorerView;
 	}
 
 	/**
