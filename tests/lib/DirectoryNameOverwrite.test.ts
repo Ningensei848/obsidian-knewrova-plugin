@@ -11,24 +11,38 @@ vi.mock("obsidian", () => {
 		TFile: class {
 			path: string;
 			extension = "md";
-			constructor(path: string) { this.path = path; }
+			constructor(path: string) {
+				this.path = path;
+			}
 		},
 		TFolder: class {
 			path: string;
-			constructor(path: string) { this.path = path; }
+			constructor(path: string) {
+				this.path = path;
+			}
 		},
 		Setting: class {
-			setName() { return this; }
-			setDesc() { return this; }
-			addToggle() { return this; }
-			addText() { return this; }
-		}
+			setName() {
+				return this;
+			}
+			setDesc() {
+				return this;
+			}
+			addToggle() {
+				return this;
+			}
+			addText() {
+				return this;
+			}
+		},
 	};
 });
 
 describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 	let feature: DirectoryNameOverwriteFeature;
+	// biome-ignore lint/suspicious/noExplicitAny: <Test mock requires any>
 	let pluginMock: any;
+	// biome-ignore lint/suspicious/noExplicitAny: <Test mock requires any>
 	let fileExplorerViewMock: any;
 
 	const mockMap: UserMap = {
@@ -39,33 +53,33 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		files: true,
 		folders: true,
 		map: {
-			"u123": "佐藤 太郎",
-			"project-a": "プロジェクトA（進行中）"
+			u123: "佐藤 太郎",
+			"project-a": "プロジェクトA（進行中）",
 		},
-		order: ["u123", "project-a"]
+		order: ["u123", "project-a"],
 	};
 
 	beforeEach(() => {
 		// File Explorer View のモックを作成
 		fileExplorerViewMock = {
-			fileItems: {}
+			fileItems: {},
 		};
 
 		pluginMock = {
 			app: {
-				vault: { 
+				vault: {
 					adapter: { exists: vi.fn(), read: vi.fn() },
-					on: vi.fn() 
+					on: vi.fn(),
 				},
-				workspace: { 
+				workspace: {
 					onLayoutReady: vi.fn((cb) => cb()),
 					on: vi.fn(),
-					getLeavesOfType: vi.fn().mockReturnValue([{ view: fileExplorerViewMock }])
+					getLeavesOfType: vi.fn().mockReturnValue([{ view: fileExplorerViewMock }]),
 				},
 				metadataCache: {
 					on: vi.fn(),
-					getFileCache: vi.fn()
-				}
+					getFileCache: vi.fn(),
+				},
 			},
 			registerEvent: vi.fn(),
 		};
@@ -73,10 +87,11 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		feature = new DirectoryNameOverwriteFeature(
 			pluginMock,
 			{ ...DEFAULT_DIRECTORY_NAME_OVERWRITE_SETTINGS },
-			vi.fn()
+			vi.fn(),
 		);
 
 		// 手動でマップを注入
+		// biome-ignore lint/suspicious/noExplicitAny: <Private property access>
 		(feature as any).userMap = mockMap;
 	});
 
@@ -90,11 +105,11 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		titleEl.appendChild(titleInner);
 
 		const fileMock = isFolder ? { path } : { path, extension: "md" };
-		
+
 		fileExplorerViewMock.fileItems[path] = {
 			el,
 			titleEl,
-			file: fileMock
+			file: fileMock,
 		};
 		return fileExplorerViewMock.fileItems[path];
 	};
@@ -114,7 +129,8 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 	describe("表示の上書き (applyTitleToItem)", () => {
 		it("Mapに定義されたフォルダ名を書き換えること", () => {
 			const item = addMockFileItem("Shared/u123", "u123", true);
-			
+
+			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyTitleToItem(item);
 
 			const titleInner = item.titleEl.querySelector(".nav-folder-title-content");
@@ -126,12 +142,13 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		it("FrontMatter に title がある場合、Map より優先されること", () => {
 			const path = "Shared/u123";
 			const item = addMockFileItem(path, "u123", false);
-			
+
 			// metadataCache のモック設定
 			pluginMock.app.metadataCache.getFileCache.mockReturnValue({
-				frontmatter: { title: "FMからの名前" }
+				frontmatter: { title: "FMからの名前" },
 			});
 
+			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyTitleToItem(item);
 
 			const titleInner = item.titleEl.querySelector(".nav-file-title-content");
@@ -142,7 +159,8 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 			const item = addMockFileItem("Other/Unknown", "Unknown", false);
 			item.el.setAttribute("data-original-name", "Unknown");
 			item.el.setAttribute("data-knewrova-overwritten", "true");
-			
+
+			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyTitleToItem(item);
 
 			expect(item.el.hasAttribute("data-original-name")).toBe(false);
@@ -154,14 +172,14 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		it("order設定に基づいてDOM要素を並び替えること", () => {
 			const rootPath = "Shared";
 			const rootItem = addMockFileItem(rootPath, "Shared", true);
-			
+
 			// 子要素コンテナを作成
 			const childrenContainer = document.createElement("div");
 			childrenContainer.className = "nav-folder-children";
-			
+
 			// rootItem.el の隣に配置するシミュレーション
-			Object.defineProperty(rootItem.el, 'nextElementSibling', {
-				get: () => childrenContainer
+			Object.defineProperty(rootItem.el, "nextElementSibling", {
+				get: () => childrenContainer,
 			});
 
 			// 子要素（ファイル/フォルダ）を逆順で作成
@@ -181,6 +199,7 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 			childrenContainer.appendChild(itemA); // u123 を後に
 
 			// ソート実行
+			// biome-ignore lint/suspicious/noExplicitAny: <Access private method>
 			(feature as any).applyFolderSorting(rootPath);
 
 			// order: ["u123", "project-a"] なので順序が入れ替わっているはず
@@ -192,7 +211,7 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 	describe("イベント連携", () => {
 		it("onload 時に必要なイベントを登録すること", async () => {
 			await feature.onload();
-			
+
 			// vault.on('rename'), metadataCache.on('changed') 等が呼ばれているか
 			expect(pluginMock.app.vault.on).toHaveBeenCalledWith("rename", expect.any(Function));
 			expect(pluginMock.app.metadataCache.on).toHaveBeenCalledWith("changed", expect.any(Function));
@@ -201,7 +220,7 @@ describe("DirectoryNameOverwriteFeature (Optimized)", () => {
 		it("onunload 時にすべての変更を元に戻すこと", () => {
 			const item = addMockFileItem("Shared/u123", "佐藤 太郎", true);
 			item.el.setAttribute("data-original-name", "u123");
-			
+
 			feature.onunload();
 
 			const titleInner = item.titleEl.querySelector(".nav-folder-title-content");
